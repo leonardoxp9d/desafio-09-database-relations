@@ -20,13 +20,83 @@ interface IRequest {
 @injectable()
 class CreateOrderService {
   constructor(
+    @inject('OrdersRepository')
     private ordersRepository: IOrdersRepository,
+    
+    @inject('ProductsRepository')
     private productsRepository: IProductsRepository,
+    
+    @inject('CustomersRepository')
     private customersRepository: ICustomersRepository,
   ) {}
 
   public async execute({ customer_id, products }: IRequest): Promise<Order> {
     // TODO
+    const customerExists = await this.customersRepository.findById(customer_id);
+
+    if (!customerExists) {
+      throw new AppError('Could not find any customer with the given id');
+    }
+    /** retorna um array de produtos existentes no banco */
+    const existentProducts = await this.productsRepository.findAllById(
+      products,
+    );
+    /** se o tamanho do array for zero, então não tem produtos com os id passado */
+    if (!existentProducts.length) {
+      throw new AppError('Could not find any products with the given ids');
+    }
+    
+    /** pega os ids dos produtos existentes */
+    const existentProductsIds = existentProducts.map(product => product.id);
+
+    /** retorna os produtos que não existe no banco */
+    const checkInexistentProducts = products.filter(
+      product => !existentProductsIds.includes(product.id),
+    );
+    /** se tiver então mostra os produtos que não estão no banco */
+    if (checkInexistentProducts.length){
+      throw new AppError(
+        `Could not find product ${checkInexistentProducts[0].id}`,
+      );
+    }
+
+    /** produtos que não tem quantidade */
+    const findProductsWithNoQuantityAvailable = products.filter(
+      product =>
+      existentProducts.filter(p => p.id === product.id)[0].quantity <
+      product.quantity,
+    );
+
+    /** caso tive algum produto que não tem quantidade então retorna essa mensagem */
+    if (findProductsWithNoQuantityAvailable.length) {
+      throw new AppError(
+        `The quantity ${findProductsWithNoQuantityAvailable[0].quantity} is not available for ${findProductsWithNoQuantityAvailable[0].id}`
+      )
+    }
+
+    const serializedProducts = products.map(product =>({
+      product_id: product.id,
+      quantity: product.quantity,
+      price: existentProducts.filter(p => p.id === product.id)[0].price,
+    }));
+
+    const order = await this.ordersRepository.create({
+      customer: customerExists,
+      products: serializedProducts,
+    });
+
+    const { order_products } = order;
+
+    const orderedProductsQuantity = order_products.map( product => ({
+      id: product.product_id,
+      quantity:
+        existentProducts.filter(p => p.id === product.product_id)[0].quantity -
+        product.quantity,
+    }));
+
+    await this.productsRepository.updateQuantity(orderedProductsQuantity);
+
+    return order;
   }
 }
 
